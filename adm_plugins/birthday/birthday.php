@@ -91,6 +91,8 @@ if (isset($plg_rolle_sql) && is_array($plg_rolle_sql) && count($plg_rolle_sql) >
     $sqlRol = 'IS NOT NULL';
 }
 
+
+
 // Check if the sort condition has been set
 if (!isset($plg_sort_sql) || $plg_sort_sql === '') {
     $sqlSort = 'DESC';
@@ -120,31 +122,56 @@ if ($gDbType === 'pgsql') {
     $sql = 'SELECT DISTINCT usr_id, usr_uuid, usr_login_name,
                         last_name.usd_value AS last_name, first_name.usd_value AS first_name,
                         birthday.bday AS birthday, birthday.bdate,
-                        EXTRACT(DAY FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\') - birthday.bdate) * (-1) AS days_to_bdate, -- DATE_NOW
-                        EXTRACT(YEAR FROM bdate) - EXTRACT(YEAR FROM TO_TIMESTAMP(bday, \'YYYY-MM-DD\')) AS age,
+                        EXTRACT(DAY FROM AGE(birthdate_normalized, today_normalized)) AS days_to_bdate,
+						EXTRACT(YEAR FROM AGE(NOW(), bdate)) as age,
                         email.usd_value AS email, gender.usd_value AS gender
           FROM '.TBL_USERS.' AS users
-    INNER JOIN ( (SELECT usd_usr_id, usd_value AS bday,
-                         TO_DATE(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\')) || TO_CHAR(TO_TIMESTAMP(bd1.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\') AS bdate -- DATE_NOW
-                    FROM '.TBL_USER_DATA.' AS bd1
-                   WHERE EXTRACT(DAY FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\') - TO_TIMESTAMP(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\')) || TO_CHAR(TO_TIMESTAMP(bd1.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\')) -- DATE_NOW,DATE_NOW
-                 BETWEEN ? AND ? -- -$plg_show_zeitraum AND $plg_show_future
-                     AND usd_usf_id = ?) -- $fieldBirthday
-               UNION
-                 (SELECT usd_usr_id, usd_value AS bday,
-                         TO_DATE(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\'))-1 || TO_CHAR(TO_TIMESTAMP(bd2.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\') AS bdate -- DATE_NOW
-                    FROM '.TBL_USER_DATA.' AS bd2
-                   WHERE EXTRACT(DAY FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\') - TO_TIMESTAMP(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\')- INTERVAL \'1 year\') || TO_CHAR(TO_TIMESTAMP(bd2.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\')) -- DATE_NOW,DATE_NOW
-                 BETWEEN ? AND ? -- -$plg_show_zeitraum AND $plg_show_future
-                     AND usd_usf_id = ?) -- $fieldBirthday
-               UNION
-                 (SELECT usd_usr_id, usd_value AS bday,
-                         TO_DATE(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\'))+1 || TO_CHAR(TO_TIMESTAMP(bd3.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\') AS bdate -- DATE_NOW
-                    FROM '.TBL_USER_DATA.' AS bd3
-                   WHERE EXTRACT(DAY FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\') - TO_TIMESTAMP(EXTRACT(YEAR FROM TO_TIMESTAMP(?, \'YYYY-MM-DD\')+ INTERVAL \'1 year\') || TO_CHAR(TO_TIMESTAMP(bd3.usd_value, \'YYYY-MM-DD\'), \'-MM-DD\'), \'YYYY-MM-DD\')) -- DATE_NOW,DATE_NOW
-                 BETWEEN ? AND ? -- -$plg_show_zeitraum AND $plg_show_future
-                     AND usd_usf_id = ?) -- $fieldBirthday
-               ) AS birthday
+    INNER JOIN (
+			SELECT
+				userdata.usd_usr_id as usd_usr_id,
+				userdata.birthdate as bday,
+				TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\') as bdate,
+				userdata.birthdate_normalized as birthdate_normalized,
+				birthdates.today_normalized as today_normalized
+			FROM
+				( SELECT
+					usd_usr_id as usd_usr_id,
+					usd_value as birthdate,
+					TO_TIMESTAMP((\'2024-\' || EXTRACT(MONTH FROM TO_TIMESTAMP(usd_value, \'YYYY-MM-DD\')) || \'-\' || EXTRACT(DAY FROM TO_TIMESTAMP(usd_value, \'YYYY-MM-DD\'))), \'YYYY-MM-DD\') as birthdate_normalized
+					FROM adm_user_data
+					WHERE USD_USF_ID = ? -- $fieldBirthday
+				) AS userdata,
+				( SELECT
+					today_normalized,
+					today_normalized + interval \'1 day\' as today_add_one,
+					today_normalized + interval \'2 day\' as today_add_two,
+					today_normalized - interval \'1 day\' as yesterday
+				FROM
+				(
+					SELECT 
+						TO_TIMESTAMP((\'2024-\' || today_month || \'-\' || today_day), \'YYYY-MM-DD\') as today_normalized
+					FROM (
+					SELECT 
+						EXTRACT(DAY FROM NOW()) as today_day,
+						EXTRACT(MONTH FROM NOW()) as today_month
+					)
+				)) AS birthdates
+			WHERE
+			(
+				EXTRACT(DAY FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(DAY FROM birthdates.yesterday) AND
+				EXTRACT(MONTH FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(MONTH FROM birthdates.yesterday)
+			) OR
+			(
+				EXTRACT(DAY FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(DAY FROM birthdates.today_normalized) AND
+				EXTRACT(MONTH FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(MONTH FROM birthdates.today_normalized)
+			) OR (
+				EXTRACT(DAY FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(DAY FROM birthdates.today_add_one) AND
+				EXTRACT(MONTH FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(MONTH FROM birthdates.today_add_one)
+			) OR (
+				EXTRACT(DAY FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(DAY FROM birthdates.today_add_two) AND
+				EXTRACT(MONTH FROM TO_TIMESTAMP(userdata.birthdate, \'YYYY-MM-DD\')) = EXTRACT(MONTH FROM birthdates.today_add_two)
+			)
+			) AS birthday
             ON birthday.usd_usr_id = usr_id
      LEFT JOIN '.TBL_USER_DATA.' AS last_name
             ON last_name.usd_usr_id = usr_id
@@ -228,20 +255,35 @@ if ($gDbType === 'pgsql') {
       ORDER BY days_to_bdate '.$sqlSort.', last_name, first_name';
 }
 
-$queryParams = array(
-    DATE_NOW,
-    DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
-    DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
-    DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
-    $gProfileFields->getProperty('LAST_NAME', 'usf_id'),
-    $gProfileFields->getProperty('FIRST_NAME', 'usf_id'),
-    $gProfileFields->getProperty('EMAIL', 'usf_id'),
-    $gProfileFields->getProperty('GENDER', 'usf_id'),
-    DATE_NOW,
-    DATE_NOW,
-    $gCurrentOrgId
-    // TODO add more params
-);
+if ($gDbType === 'pgsql') {
+    $queryParams = array(
+        $fieldBirthday,
+        $gProfileFields->getProperty('LAST_NAME', 'usf_id'),
+        $gProfileFields->getProperty('FIRST_NAME', 'usf_id'),
+        $gProfileFields->getProperty('EMAIL', 'usf_id'),
+        $gProfileFields->getProperty('GENDER', 'usf_id'),
+        DATE_NOW,
+        DATE_NOW,
+        $gCurrentOrgId
+    );
+} else {
+    $queryParams = array(
+        DATE_NOW,
+        DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
+        DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
+        DATE_NOW, DATE_NOW, DATE_NOW, -$plg_show_zeitraum, $plg_show_future, $fieldBirthday,
+        $gProfileFields->getProperty('LAST_NAME', 'usf_id'),
+        $gProfileFields->getProperty('FIRST_NAME', 'usf_id'),
+        $gProfileFields->getProperty('EMAIL', 'usf_id'),
+        $gProfileFields->getProperty('GENDER', 'usf_id'),
+        DATE_NOW,
+        DATE_NOW,
+        $gCurrentOrgId
+        // TODO add more params
+    );
+}
+
+
 $birthdayStatement = $gDb->queryPrepared($sql, $queryParams);
 
 $numberBirthdays = $birthdayStatement->rowCount();
